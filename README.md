@@ -74,7 +74,7 @@ git add .gitattributes
 
 
 
-A) Denoising (Noise2Void)
+## A) Denoising (Noise2Void)
 # Windows
 python "Noise2Void Denoising\noise2v_train.py"
 
