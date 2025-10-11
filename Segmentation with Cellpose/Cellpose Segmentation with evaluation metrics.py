@@ -8,9 +8,9 @@ Full pipeline (interactive, strict GT pairing):
 - Select output folder
 
 Pairs images ↔ GTs by:
-✅ Same ROI number (ROI1, ROI2, etc.)
-✅ Same strain/condition keyword (WT, DpspA, THY, NHS, etc.)
-✅ Falls back to fuzzy matching only if no match found.
+Same ROI number (ROI1, ROI2, etc.)
+Same strain/condition keyword (WT, DpspA, THY, NHS, etc.)
+Falls back to fuzzy matching only if no match found.
 
 Then:
 - ONLY checks if Noise2Void denoised caches exist NEXT TO each image
