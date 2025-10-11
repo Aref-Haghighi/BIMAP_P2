@@ -1,4 +1,4 @@
-# --- Torch (pip CPU wheels by default) ---
+# --- PyTorch (CPU wheels by default) ---
 torch==2.2.2
 torchvision==0.17.2
 
@@ -18,10 +18,15 @@ n2v==0.3.4
 czifile==2019.7.2
 read-roi==1.6.1
 
-# --- QA / metrics helpers ---
+# --- Image quality / support libs ---
 brisque==0.0.16
 libsvm-official==3.32.0
 
-# --- Excel writers (your audit script can use either) ---
+# --- Excel writers used by audit script ---
 openpyxl==3.1.5
 XlsxWriter==3.2.0
+
+# --- TensorFlow backend for N2V/CSBDeep (CPU) ---
+tensorflow==2.12.*
+keras==2.12.*
+tensorflow-io-gcs-filesystem==0.31.0
