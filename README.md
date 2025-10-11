@@ -8,7 +8,6 @@ Automated segmentation and denoising of *Streptococcus pneumoniae* structured-il
 
 - [Overview](#overview)
 - [Technologies](#technologies)
-- [Project Structure](#project-structure)
 - [Installation](#installation)
 - [Usage](#usage)
 - [Configuration](#configuration)
@@ -57,26 +56,6 @@ Researchers who want a transparent, rerunnable baseline with figures and tables 
 - scikit-image, OpenCV, NumPy, SciPy
 - Matplotlib, Pandas
 - czifile, read-roi
-
----
-
-## Project Structure
-
-```
-BIMAP_P2/
-├─ README.md
-├─ requirements.txt
-├─ .gitignore
-├─ paper/
-│  └─ BIMAP_P2_Mostajer_Haghighi.pdf
-├─ scripts/
-│  ├─ noise2v_train.py
-│  ├─ full_pipeline_cellpose.py           # or "Full pipeline_segmentation.py"
-│  ├─ train_UNet_from_scratch.py
-│  └─ loss_performance metrics.py         # training audit / learning-curves
-├─ experiments/                           # created at runtime (checkpoints, logs)
-└─ results/                                # created at runtime (overlays, CSV/Excel, plots)
-```
 
 ---
 
