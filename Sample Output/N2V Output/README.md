@@ -1,5 +1,5 @@
 
-# overlays:
+# Overlays Metric:
 
 IMG1_overlay.png: RAW vs DENOISED (both with scalebar)
 
@@ -15,7 +15,7 @@ IMG1_line_profile.png:   Edge line-profile and ΔFWHM
 
 IMG1_radial_power.png:    Radial power spectrum (RAW vs DENOISED)
 
-
+# Main output
 
 - IMG1_denoised_R.npy:                N2V cache for Red channel (raw units)
 - IMG1_denoised_G.npy:                N2V cache for Green channel (raw units)
