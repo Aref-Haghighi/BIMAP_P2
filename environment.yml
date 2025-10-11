@@ -1,49 +1,50 @@
 name: bimap-p2
 channels:
-  - conda-forge
+  - nvidia
   - pytorch
+  - conda-forge
 
 dependencies:
-  # --- Core runtime ---
+  # --- Core ---
   - python=3.10
   - pip
-  - tk                          # for Tk-based file dialogs in your scripts
+  - tk
 
-  # --- Numerics / image / plotting ---
+  # --- Numerics / image / plotting (aligned to your current env) ---
   - numpy=1.26.*
   - scipy=1.11.*
-  - scikit-image=0.23.*
-  - pandas=2.2.*
-  - matplotlib=3.8.*
-  - opencv=4.9.*               # conda-forge OpenCV build
+  - scikit-image=0.21.*
+  - pandas=2.3.*
+  - matplotlib=3.10.*
+  - opencv=4.9.*
   - tifffile>=2024.5.10
 
-  # --- PyTorch (CPU build) ---
-  - pytorch=2.2.*
-  - torchvision=0.17.*
-  - cpuonly                    # ensure a CPU-only PyTorch
+  # --- PyTorch + CUDA 12.1 (matches your GPU output) ---
+  - pytorch=2.5.*
+  - torchvision=0.20.*
+  - pytorch-cuda=12.1
 
   # --- Utilities used by your scripts ---
-  - libsvm                     # for BRISQUE backend (your code has shims)
-  - openpyxl                   # Excel writer (path A)
-  - xlsxwriter                 # Excel writer (path B)
+  - libsvm
+  - openpyxl
+  - xlsxwriter
 
-  # --- PyPI packages (install via pip from within the conda env) ---
+  # --- PyPI-only packages (installed via pip inside this env) ---
   - pip:
       # Microscopy + denoising
       - cellpose==3.0.7
       - csbdeep==0.7.4
-      - n2v==0.3.4
+      - n2v==0.3.3
       - czifile==2019.7.2
       - read-roi==1.6.1
 
       # Image quality metrics
       - brisque==0.0.16
 
-      # TensorFlow backend for N2V / CSBDeep (CPU)
-      - tensorflow==2.12.*
-      - keras==2.12.*
+      # TensorFlow (CPU) backend for N2V/CSBDeep (Windows TF-GPU not supported here)
+      - tensorflow==2.11.1
+      - keras==2.11.*
       - tensorflow-io-gcs-filesystem==0.31.0
 
-      # If running headless, you can swap OpenCV:
+      # If running headless, you can swap OpenCV (comment conda opencv above):
       # - opencv-python-headless==4.9.0.80
