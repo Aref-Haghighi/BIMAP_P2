@@ -1,0 +1,43 @@
+{
+  "source_exp": "unet_cv",
+  "dest_exp": "unet_eval_rgb",
+  "modes": [
+    "raw",
+    "n2v"
+  ],
+  "tta_8x": true,
+  "in_mode": "g",
+  "microns_per_pixel": 0.0322,
+  "thr_grid": [
+    0.45,
+    0.47500000000000003,
+    0.5,
+    0.525,
+    0.55,
+    0.575,
+    0.6000000000000001,
+    0.625,
+    0.65
+  ],
+  "postprocess": {
+    "match_full_pipeline": true,
+    "proba_gaussian_sigma": 0.0,
+    "remove_small_area_pre_split": 0,
+    "binary_opening_radius": 0,
+    "min_solidity": 0.3,
+    "min_area": 10,
+    "ws_min_distance": 10
+  },
+  "display": {
+    "lum_low": 2.0,
+    "lum_high": 99.7,
+    "gain": 1.15,
+    "gamma": 0.9
+  },
+  "scalebar": {
+    "um": 2.0,
+    "loc": "lower right",
+    "text": 14
+  },
+  "evaluation": "Dice/IoU computed only on prediction overlapped with GT (clipped-to-GT)."
+}
