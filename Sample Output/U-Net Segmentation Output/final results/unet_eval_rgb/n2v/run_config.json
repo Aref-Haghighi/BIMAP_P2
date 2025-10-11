@@ -1,0 +1,8 @@
+{
+  "mode": "n2v",
+  "base": 32,
+  "tta_8x": true,
+  "source_exp": "unet_cv",
+  "evaluation": "overlap-only (prediction clipped to GT) for Dice/IoU.",
+  "postprocess_like_full_pipeline": true
+}

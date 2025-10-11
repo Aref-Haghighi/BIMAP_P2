@@ -1,0 +1,1 @@
+experiments\unet_cv\n2v\fold_7\best.pt
