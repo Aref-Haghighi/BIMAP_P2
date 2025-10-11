@@ -29,21 +29,26 @@ Flexible:
 - Paper metrics (per-image Dice/IoU) to a single Excel (two locations) + overlays
 """
 
-import os, json, random, warnings, time, csv
-from pathlib import Path
-from typing import Tuple, List, Optional, Sequence, Dict
+# ---- Standard libs and typing ----
+import os, json, random, warnings, time, csv             # OS, JSON, RNG, warnings, timing, CSV
+from pathlib import Path                                  # Cross-platform paths
+from typing import Tuple, List, Optional, Sequence, Dict  # Type hints
+
+# ---- Numerics / plotting / data ----
 import numpy as np
 import matplotlib.pyplot as plt
-from mpl_toolkits.axes_grid1.anchored_artists import AnchoredSizeBar
+from mpl_toolkits.axes_grid1.anchored_artists import AnchoredSizeBar  # Scale bar overlay
 import matplotlib.patheffects as pe
 import pandas as pd
 import cv2
 
+# ---- PyTorch ----
 import torch
 import torch.nn as nn
 from torch import amp
 from torch.utils.data import Dataset, DataLoader
 
+# ---- Image IO and processing ----
 from czifile import imread as czi_imread
 from read_roi import read_roi_zip
 from skimage.draw import polygon2mask
@@ -63,18 +68,18 @@ parser.add_argument("--images", type=str, default="", help="Comma-separated imag
 parser.add_argument("--rois", type=str, default="", help="Comma-separated ROI .zip paths. If empty => ask.")
 parser.add_argument("--out-dir", type=str, default="", help="Output directory. If empty => ask.")
 
-# Experiment naming
+# Experiment naming (where checkpoints are read/written)
 parser.add_argument("--source-exp", type=str, default="unet_cv", help="Folder under ./experiments for checkpoints")
 parser.add_argument("--exp-name", type=str, default="unet_eval_rgb", help="Destination experiment name (subfolder)")
 
-# Pipeline modes
+# Pipeline modes (raw/n2v/both) and model/input config
 parser.add_argument("--modes", type=str, default="both", choices=["raw","n2v","both"], help="Pipelines to evaluate")
 parser.add_argument("--no-tta", action="store_true", help="Disable 8x TTA")
 parser.add_argument("--base", type=int, default=32, help="UNet base channels")
 parser.add_argument("--n2v-cache", type=str, default="./n2v_cache", help="Folder with *_denoised_[RGB].npy")
 parser.add_argument("--in-mode", type=str, default="g", choices=["g","rgb","lum"], help="Model input: g=green, rgb=3ch, lum=luminance")
 
-# Train controls
+# Train controls and augmentation
 parser.add_argument("--train", action="store_true", help="Enable LOIO training before evaluation")
 parser.add_argument("--epochs", type=int, default=50)
 parser.add_argument("--lr", type=float, default=1e-3)
@@ -87,12 +92,12 @@ parser.add_argument("--pos-frac", type=float, default=0.5)
 parser.add_argument("--aug-rot", action="store_true")
 parser.add_argument("--seed", type=int, default=42)
 
-# Supervisor-facing knobs
+# Supervisor-facing knobs (early stop and LR scheduler)
 parser.add_argument("--patience", type=int, default=12, help="Early stopping patience (validations without improvement)")
 parser.add_argument("--min-epochs", type=int, default=10, help="Minimum epochs before early stop")
 parser.add_argument("--cosine", action="store_true", help="Use CosineAnnealingLR scheduler")
 
-# Display/overlays
+# Display/overlays (scale bar and tone mapping)
 parser.add_argument("--show", dest="show", action="store_true", help="Show overlays while saving")
 parser.add_argument("--no-show", dest="show", action="store_false", help="Save-only, do not show")
 parser.set_defaults(show=True)
@@ -107,76 +112,81 @@ parser.add_argument("--lum-high", type=float, default=99.7,  help="Upper luminan
 parser.add_argument("--gain",     type=float, default=1.15,  help="Global gain after stretch")
 parser.add_argument("--gamma",    type=float, default=0.90,  help="Gamma (<1 brightens mids)")
 
+# Parse known args once at import time (so other helpers can read args)
 args, _ = parser.parse_known_args()
 
 # ---------- Constants ----------
 SEED   = args.seed
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-SRC_ROOT   = Path("./experiments") / args.source_exp
-N2V_CACHE  = Path(args.n2v_cache)
+SRC_ROOT   = Path("./experiments") / args.source_exp   # root for reading/writing fold checkpoints
+N2V_CACHE  = Path(args.n2v_cache)                      # where *_denoised_[RGB].npy might live
 
-MICRONS_PER_PIXEL = 0.0322  # µm / px
-PATCH_SIZE_EVAL   = 512
-SLIDE_STRIDE      = 256
-THR_GRID          = np.linspace(0.45, 0.65, 9)
+MICRONS_PER_PIXEL = 0.0322  # µm / px for scale bar overlays
+PATCH_SIZE_EVAL   = 512     # inference tile size
+SLIDE_STRIDE      = 256     # inference stride (overlap for blending)
+THR_GRID          = np.linspace(0.45, 0.65, 9)  # candidate thresholds for picking best Dice (overlap-only)
 
-# IMPORTANT: match full-pipeline post-processing
+# IMPORTANT: match full-pipeline post-processing (disabled options kept for parity)
 PROBA_SMOOTH_SIGMA     = 0.0   # no prob smoothing
 REMOVE_SMALL_PRED_AREA = 0     # no pre-split small-object removal
 OPENING_RADIUS         = 0     # no pre-split opening
-WS_MIN_DISTANCE        = 10
-FILTER_MIN_AREA        = 10
-FILTER_MIN_SOLIDITY    = 0.30
+WS_MIN_DISTANCE        = 10    # watershed seed separation
+FILTER_MIN_AREA        = 10    # small-object filter after watershed
+FILTER_MIN_SOLIDITY    = 0.30  # solidity filter after watershed
 
 # ---------- Utils ----------
 def seed_all(s=SEED):
+    """Make results repeatable across Python, NumPy, and Torch."""
     random.seed(s); np.random.seed(s)
     torch.manual_seed(s); torch.cuda.manual_seed_all(s)
 seed_all()
 if DEVICE.type == "cuda":
-    torch.backends.cudnn.benchmark = True
+    torch.backends.cudnn.benchmark = True  # allow cuDNN to find best algos for fixed shapes
 
 def normalize01(x: np.ndarray) -> np.ndarray:
+    """Normalize array to [0,1] with numeric safety for constant images."""
     x = x.astype(np.float32); mn, mx = float(x.min()), float(x.max())
     return np.zeros_like(x) if mx <= mn else (x - mn) / (mx - mn + 1e-8)
 
 # IO: CZI + standard images
 def _read_any_image_float01(path: str) -> np.ndarray:
     """
-    Return (C,Y,X) float[0,1].
-    - .czi via czifile: squeeze to C,Y,X using Z=0,T=0
-    - jpg/png/tif via cv2 -> RGB -> (C,Y,X)
+    Load an image and return (C,Y,X) float in [0,1].
+    - .czi: via czifile, reduce to C,Y,X by picking Z=0 (and T=0 if present).
+    - .jpg/.png/.tif: via OpenCV, convert BGR->RGB, scale to [0,1], move to (C,Y,X).
     """
     ext = Path(path).suffix.lower()
     if ext == ".czi":
         arr = np.squeeze(czi_imread(path))
-        if arr.ndim == 5: arr = arr[0]           # T,C,Z,Y,X -> C,Z,Y,X
+        if arr.ndim == 5: arr = arr[0]           # T,C,Z,Y,X -> C,Z,Y,X (assume T=0)
         if arr.ndim == 4:
             if arr.shape[0] < 3 and arr.shape[1] >= 3:
-                arr = np.moveaxis(arr, 0, 1)     # Z,C,Y,X -> C,Z,Y,X
-            arr = arr[:, 0]                      # Z=0 => (C,Y,X)
+                arr = np.moveaxis(arr, 0, 1)     # Z,C,Y,X -> C,Z,Y,X if needed
+            arr = arr[:, 0]                      # pick Z=0 -> (C,Y,X)
         if arr.ndim != 3:
             raise ValueError(f"Unexpected CZI shape {arr.shape} for {path}")
         return normalize01(arr.astype(np.float32))
     img = cv2.imread(path, cv2.IMREAD_UNCHANGED)
     if img is None: raise ValueError(f"Cannot read image: {path}")
-    if img.ndim == 2:
+    if img.ndim == 2:                              # grayscale -> replicate into RGB
         g = normalize01(img)
         return np.stack([g,g,g], axis=0)
     if img.ndim == 3:
-        if img.shape[2] == 4:
+        if img.shape[2] == 4:                      # drop alpha if present
             img = cv2.cvtColor(img, cv2.COLOR_BGRA2BGR)
         img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB).astype(np.float32)
         if img.max() > 1.0: img /= 255.0
-        return np.moveaxis(img, 2, 0)
+        return np.moveaxis(img, 2, 0)             # HWC -> CHW
     raise ValueError(f"Unsupported image ndim for {path}")
 
 def czi_to_green01(filename: str) -> np.ndarray:
+    """Return normalized green channel (H,W) from (C,Y,X); pick channel 1 if available, else 0."""
     cyx = _read_any_image_float01(filename)
     g_idx = 1 if cyx.shape[0] >= 2 else 0
     return normalize01(cyx[g_idx])
 
 def get_rgb01_any(path: str) -> np.ndarray:
+    """Return a best-effort 3-channel RGB CHW normalized to [0,1] from any supported image."""
     cyx = _read_any_image_float01(path)
     c = cyx.shape[0]
     r = 0 if c>=1 else c-1
@@ -185,6 +195,10 @@ def get_rgb01_any(path: str) -> np.ndarray:
     return np.stack([normalize01(cyx[r]), normalize01(cyx[g]), normalize01(cyx[b])], axis=0)  # (3,H,W)
 
 def roi_zip_to_binary_mask(roi_zip: str, shape: Tuple[int,int]) -> np.ndarray:
+    """
+    Convert an ImageJ ROI .zip containing polygon ROIs to a binary mask of given shape (H,W).
+    Non-polygon entries or degenerate polygons are ignored.
+    """
     mask = np.zeros(shape, dtype=np.uint8)
     rois = read_roi_zip(roi_zip)
     for r in rois.values():
@@ -195,6 +209,7 @@ def roi_zip_to_binary_mask(roi_zip: str, shape: Tuple[int,int]) -> np.ndarray:
     return mask
 
 def _try_load(path: Path) -> Optional[np.ndarray]:
+    """Load .npy if exists; return None on missing or any exception."""
     try:
         if path.exists(): return np.load(path).astype(np.float32)
     except Exception: pass
@@ -202,11 +217,19 @@ def _try_load(path: Path) -> Optional[np.ndarray]:
 
 # Model input by pipeline mode + in-mode
 def get_input_by_mode(img_path: str, pipe_mode: str, in_mode: str) -> np.ndarray:
+    """
+    Build model input tensor (numpy array) according to:
+      - pipe_mode: 'raw' (use raw image) or 'n2v' (use *_denoised_*.npy caches if found)
+      - in_mode:   'g' (1ch green), 'rgb' (3ch), 'lum' (1ch luminance)
+    Returns array with shape:
+      - (1,H,W) for 'g' or 'lum'
+      - (3,H,W) for 'rgb'
+    """
     if in_mode == "g":
         g = czi_to_green01(img_path)  # (H,W)
         if pipe_mode == "raw":
             return g[None,...]
-        # n2v
+        # n2v channel cache lookup (prefer N2V_CACHE, then beside image)
         base = Path(img_path).name
         for p in [N2V_CACHE/f"{base}_denoised_G.npy", Path(img_path).with_suffix("").with_name(base+"_denoised_G.npy")]:
             arr = _try_load(p)
@@ -214,7 +237,7 @@ def get_input_by_mode(img_path: str, pipe_mode: str, in_mode: str) -> np.ndarray
         print(f"[n2v] WARNING missing denoised G for {base}; fallback RAW.")
         return g[None,...]
 
-    # RGB or luminance
+    # RGB or luminance requires 3 channels
     def _rgb_from(mode):
         stem = Path(img_path).name
         if mode == "n2v":
@@ -234,12 +257,17 @@ def get_input_by_mode(img_path: str, pipe_mode: str, in_mode: str) -> np.ndarray
     RGB = _rgb_from(pipe_mode)  # (3,H,W)
     if in_mode == "rgb":
         return RGB
-    # luminance
+    # luminance channel from RGB
     Y = (0.2126*RGB[0] + 0.7152*RGB[1] + 0.0722*RGB[2]).astype(np.float32)
     return Y[None,...]
 
 # Display enhancer (visual only)
 def enhance_rgb_for_display(rgb01_hwc: np.ndarray, low_pct=2.0, high_pct=99.7, gain=1.15, gamma=0.90):
+    """
+    Tone-map an RGB image (H,W,3) for human-friendly overlays:
+    percentile stretch on luminance, global gain, then gamma.
+    Returns float in [0,1].
+    """
     x = rgb01_hwc.clip(0,1).astype(np.float32)
     Y = 0.2126*x[...,0]+0.7152*x[...,1]+0.0722*x[...,2]
     lo,hi = np.percentile(Y,low_pct), np.percentile(Y,high_pct)
@@ -250,7 +278,11 @@ def enhance_rgb_for_display(rgb01_hwc: np.ndarray, low_pct=2.0, high_pct=99.7, g
     return x
 
 def get_rgb_display(img_path: str, pipe_mode: str, lum_low=2.0, lum_high=99.7, gain=1.15, gamma=0.90) -> np.ndarray:
-    # try n2v RGB first
+    """
+    Produce an (H,W,3) display RGB for overlay backgrounds.
+    Preference: if pipe_mode=='n2v' and *_denoised_[RGB].npy exist, use denoised RGB;
+    otherwise fall back to RAW RGB.
+    """
     stem = Path(img_path).name
     for r,g,b in [
         (N2V_CACHE/f"{stem}_denoised_R.npy", N2V_CACHE/f"{stem}_denoised_G.npy", N2V_CACHE/f"{stem}_denoised_B.npy"),
@@ -267,11 +299,15 @@ def get_rgb_display(img_path: str, pipe_mode: str, lum_low=2.0, lum_high=99.7, g
 
 # ---------- Pairing images ↔ ROI ZIPs ----------
 def _tokens(s: str) -> set:
+    """Tokenize a filename stem into lowercase words (split on space/underscore/dash)."""
     base = Path(s).stem.lower().replace("_"," ").replace("-"," ")
     return set([t for t in base.split() if t])
 
 def pair_images_to_rois(image_paths: List[str], roi_paths: List[str]) -> List[Tuple[str,str]]:
-    """One-to-one pairing by filename token Jaccard similarity. Keeps original image order for folds."""
+    """
+    Pair images to ROI zips one-to-one by Jaccard similarity over tokens.
+    Keeps image order (needed to define folds deterministically).
+    """
     from itertools import product
     I = list(map(str, image_paths)); R = list(map(str, roi_paths))
     ti = [(_tokens(p), p) for p in I]
@@ -280,7 +316,7 @@ def pair_images_to_rois(image_paths: List[str], roi_paths: List[str]) -> List[Tu
     for (ti_tokens, ip), (tr_tokens, rp) in product(ti, tr):
         inter = len(ti_tokens & tr_tokens)
         union = len(ti_tokens | tr_tokens) or 1
-        scores.append((-(inter/union), ip, rp))  # negative for ascending sort -> max first
+        scores.append((-(inter/union), ip, rp))  # negative for ascending sort
     scores.sort()
     used_i, used_r = set(), set()
     pairs = []
@@ -292,11 +328,12 @@ def pair_images_to_rois(image_paths: List[str], roi_paths: List[str]) -> List[Tu
     if len(pairs) < len(I) or len(pairs) < len(R):
         print(f"[pair] WARNING: unmatched items (images={len(I)}, rois={len(R)}, pairs={len(pairs)})")
     ip2rp = {ip: rp for ip, rp in pairs}
-    ordered = [(ip, ip2rp.get(ip, R[0])) for ip in I]  # fallback to first ROI if missing
+    ordered = [(ip, ip2rp.get(ip, R[0])) for ip in I]  # fallback: first ROI if missing match
     return ordered
 
 # ---------- Model ----------
 class DoubleConv(nn.Module):
+    """Two Conv-BN-ReLU blocks commonly used in U-Net enc/dec stages."""
     def __init__(self, in_ch, out_ch):
         super().__init__()
         self.net = nn.Sequential(
@@ -306,6 +343,12 @@ class DoubleConv(nn.Module):
     def forward(self, x): return self.net(x)
 
 class UNet(nn.Module):
+    """
+    4-down 4-up U-Net with skip connections.
+    in_ch: 1 or 3 depending on in-mode
+    out_ch: 1 (binary probability before sigmoid)
+    base: number of channels in the first stage (doubles each down-step)
+    """
     def __init__(self, in_ch=1, out_ch=1, base=32):
         super().__init__()
         self.d1 = DoubleConv(in_ch, base)
@@ -330,6 +373,10 @@ class UNet(nn.Module):
 
 # ---------- Inference ----------
 def _tukey2d(h, w, alpha=0.6, eps=0.10):
+    """
+    2D Tukey window for seamless tile blending.
+    alpha controls taper percentage; eps prevents zeros to avoid dividing by zero.
+    """
     def tukey(n, a):
         if a <= 0:  return np.ones(n, np.float32)
         if a >= 1:  return np.hanning(n).astype(np.float32)
@@ -343,7 +390,11 @@ def _tukey2d(h, w, alpha=0.6, eps=0.10):
 
 @torch.no_grad()
 def sliding_proba_seamless(model, image_chw: np.ndarray, patch=PATCH_SIZE_EVAL, stride=SLIDE_STRIDE) -> np.ndarray:
-    # image_chw: (C,H,W)
+    """
+    Sliding-window inference with Tukey blending for seamless probability maps.
+    image_chw: (C,H,W) floats in [0,1]
+    Returns a 2D probability map (H,W) in [0,1].
+    """
     C,H,W = image_chw.shape
     acc  = np.zeros((H,W), np.float32); wsum = np.zeros((H,W), np.float32)
     win_full = _tukey2d(patch, patch, alpha=0.6, eps=0.10)
@@ -365,6 +416,10 @@ def sliding_proba_seamless(model, image_chw: np.ndarray, patch=PATCH_SIZE_EVAL, 
 
 @torch.no_grad()
 def tta_proba_8x(model, image_chw: np.ndarray) -> np.ndarray:
+    """
+    Test-time augmentation: 4 rotations × {no flip, horizontal flip} = 8 variants.
+    Average the de-rotated/deflipped probabilities.
+    """
     rots=[0,1,2,3]; flips=[False,True]
     ps=[]
     for r in rots:
@@ -378,6 +433,10 @@ def tta_proba_8x(model, image_chw: np.ndarray) -> np.ndarray:
 
 # ---------- Metrics (overlap-only) ----------
 def dice_iou_overlap_only(pred_bin: np.ndarray, gt_bin: np.ndarray):
+    """
+    Compute Dice/IoU in overlap-only regime:
+    pred is clipped to GT (pred ∧ GT). Equivalent to measuring recall-ish terms.
+    """
     pred_eff = np.logical_and(pred_bin>0, gt_bin>0)
     gt_bool  = (gt_bin>0)
     inter = np.logical_and(pred_eff, gt_bool).sum()
@@ -387,6 +446,10 @@ def dice_iou_overlap_only(pred_bin: np.ndarray, gt_bin: np.ndarray):
     return float(dice), float(iou)
 
 def pick_best_threshold_overlap(prob: np.ndarray, gt: np.ndarray, grid=THR_GRID):
+    """
+    Pick a probability threshold that maximizes overlap-only Dice on validation image.
+    Removes tiny objects at size=1 to stabilize.
+    """
     gt_bool = (gt>0); best_t, best_d = grid[0], -1.0
     for t in grid:
         m = (prob>=t).astype(np.uint8)
@@ -397,19 +460,24 @@ def pick_best_threshold_overlap(prob: np.ndarray, gt: np.ndarray, grid=THR_GRID)
 
 # ---------- Postprocess (MATCHES full pipeline) ----------
 def split_touching_cells(mask, min_distance=WS_MIN_DISTANCE):
+    """
+    Watershed split on distance transform with light Gaussian smoothing (σ=0.7).
+    Then remove tiny labels and filter by min area and min solidity.
+    Returns a labeled image (int32), with 0 as background.
+    """
     proc = mask.astype(bool)
     if proc.sum()==0: return np.zeros_like(mask, dtype=np.int32)
-    # DT + light smoothing (as in full pipeline)
+    # Distance transform + slight smoothing (as in pipeline)
     dist = gaussian(ndi.distance_transform_edt(proc), sigma=0.7)
-    # seed peaks
+    # Peak seeds for watershed
     coords = peak_local_max(dist, min_distance=min_distance, labels=proc)
     peaks = np.zeros_like(dist, dtype=bool)
     if coords.size: peaks[tuple(coords.T)] = True
     else: peaks[np.unravel_index(np.argmax(dist), dist.shape)] = True
     markers,_ = ndi.label(peaks)
-    # watershed
+    # Watershed over negative distance (basins at peaks)
     labels = watershed(-dist, markers, mask=proc)
-    # remove tiny labels, then region filtering
+    # Remove tiny labels then filter by area/solidity
     labels = morphology.remove_small_objects(labels, min_size=FILTER_MIN_AREA)
     from skimage.measure import regionprops
     out = np.zeros_like(labels, dtype=np.int32); k=1
@@ -420,6 +488,10 @@ def split_touching_cells(mask, min_distance=WS_MIN_DISTANCE):
 
 # ---------- Checkpoints ----------
 def try_load_state(model: nn.Module, path: Path) -> bool:
+    """
+    Load a state_dict from path if present.
+    Returns True on success, False if missing or incompatible.
+    """
     if not path.exists():
         print(f"[ckpt] missing: {path}"); return False
     try:
@@ -436,6 +508,10 @@ def try_load_state(model: nn.Module, path: Path) -> bool:
 
 # ---------- Scalebar + overlay ----------
 def _style_asb_label(asb, color='white', fontsize=12):
+    """
+    Best-effort to style AnchoredSizeBar label across Matplotlib versions
+    (some expose .txt_label, some .label_txt).
+    """
     for attr in ('txt_label','label_txt'):
         obj = getattr(asb, attr, None)
         if obj is None: continue
@@ -446,6 +522,14 @@ def _style_asb_label(asb, color='white', fontsize=12):
         except Exception: pass
 
 def add_scale_bar_um(ax, image_shape, microns_per_pixel, bar_um, loc, text_size):
+    """
+    Add a white anchored scale bar with µm label to axis 'ax'.
+    image_shape: (H,W)
+    microns_per_pixel: µm/px
+    bar_um: physical length to display
+    loc: corner (string)
+    text_size: label font size
+    """
     H,W = image_shape[:2]
     bar_px = (bar_um if bar_um and bar_um>0 else 2.0)/microns_per_pixel
     loc_map = {'upper right':1,'upper left':2,'lower left':3,'lower right':4}
@@ -463,6 +547,13 @@ def save_panel_with_contours(base_rgb01: np.ndarray, title: str, out_path: Path,
                              gt_linew: float, pred_linew: float,
                              microns_per_pixel: float, bar_um: float, bar_loc: str, bar_text_size: int,
                              show: bool):
+    """
+    Save an overlay panel:
+      - base image tone-mapped (RGB 0..1)
+      - GT boundary in blue
+      - prediction boundary in yellow
+      - scale bar in desired corner
+    """
     H,W,_ = base_rgb01.shape
     fig, ax = plt.subplots(1,1, figsize=(10,10*H/W), facecolor='black')
     ax.imshow((base_rgb01*255).astype(np.uint8), interpolation='nearest')
@@ -480,6 +571,12 @@ def save_panel_with_contours(base_rgb01: np.ndarray, title: str, out_path: Path,
 
 # ---------- Training ----------
 class PatchDataset(Dataset):
+    """
+    Infinite patch sampler for segmentation:
+      - samples positive or random centers
+      - random flips (H/V) and optional 90° rotations
+      - pads edge tiles with reflect to ensure (patch, patch)
+    """
     def __init__(self, images: Sequence[np.ndarray], masks: Sequence[np.ndarray],
                  patch: int=256, pos_frac: float=0.5, aug_rot90: bool=False):
         self.images = [img.astype(np.float32) for img in images]  # (C,H,W)
@@ -489,7 +586,7 @@ class PatchDataset(Dataset):
         for m in self.masks:
             ys,xs = np.where(m>0)
             self.fg_coords.append(np.stack([ys,xs],1) if ys.size else np.zeros((0,2),int))
-    def __len__(self): return 10_000_000
+    def __len__(self): return 10_000_000  # practically infinite
     def __getitem__(self, idx):
         k = random.randrange(len(self.images))
         img = self.images[k]; msk = self.masks[k]
@@ -518,6 +615,7 @@ class PatchDataset(Dataset):
         return x_t, y_t
 
 class BCEDiceLoss(nn.Module):
+    """Blend BCEWithLogits and Dice loss for stable training on imbalanced masks."""
     def __init__(self, bce_weight: float=0.5, smooth: float=1.0):
         super().__init__()
         self.bce = nn.BCEWithLogitsLoss(); self.w = float(np.clip(bce_weight,0,1)); self.smooth = smooth
@@ -532,9 +630,12 @@ class BCEDiceLoss(nn.Module):
 
 @torch.no_grad()
 def eval_on_val_image(model, val_img_chw: np.ndarray, val_msk: np.ndarray, use_tta=True):
+    """
+    Evaluate a single validation image to pick best threshold for overlap-only Dice.
+    Returns (best_dice, threshold).
+    """
     prob = tta_proba_8x(model, val_img_chw) if use_tta else sliding_proba_seamless(model, val_img_chw)
-    # keep PROBA_SMOOTH_SIGMA=0.0 to match full pipeline
-    if PROBA_SMOOTH_SIGMA>0:  # currently disabled
+    if PROBA_SMOOTH_SIGMA>0:  # currently disabled to match pipeline exactly
         prob = gaussian(prob, sigma=PROBA_SMOOTH_SIGMA, preserve_range=True)
     thr, dice_val = pick_best_threshold_overlap(prob, (val_msk>0).astype(np.uint8), THR_GRID)
     return float(dice_val), float(thr)
@@ -548,6 +649,14 @@ def train_fold_loio(model: nn.Module,
                     samples_per_epoch: int, val_every: int,
                     bce_weight: float, pos_frac: float, aug_rot90: bool,
                     use_tta_for_val: bool):
+    """
+    Train one LOIO fold:
+      - build PatchDataset from train images/masks
+      - iterate steps_per_epoch = samples_per_epoch // batch
+      - validate every 'val_every' epochs using overlap-only val Dice
+      - early stopping with --patience and --min-epochs
+      - save 'best.pt' and 'last.pt'; plot learning_curves.png
+    """
     out_fold_dir.mkdir(parents=True, exist_ok=True)
     (out_fold_dir / "train_config.json").write_text(json.dumps({
         "lr": lr, "epochs": epochs, "batch": batch, "patch": patch, "samples_per_epoch": samples_per_epoch,
@@ -562,10 +671,12 @@ def train_fold_loio(model: nn.Module,
     if not log_csv.exists():
         log_csv.write_text("epoch,train_loss,val_dice,time_s\n")
 
+    # Data pipeline
     ds = PatchDataset(train_imgs, train_msks, patch=patch, pos_frac=pos_frac, aug_rot90=aug_rot90)
     steps_per_epoch = max(1, samples_per_epoch // batch)
     loader = DataLoader(ds, batch_size=batch, shuffle=False, num_workers=0, drop_last=True)
 
+    # Optimizer / loss / mixed precision / optional scheduler
     opt = torch.optim.Adam(model.parameters(), lr=lr)
     loss_fn = BCEDiceLoss(bce_weight=bce_weight)
     scaler = amp.GradScaler('cuda') if DEVICE.type=="cuda" else None
@@ -615,7 +726,7 @@ def train_fold_loio(model: nn.Module,
                 break
         if scheduler is not None: scheduler.step()
 
-    # Plot curves
+    # Plot learning curves from CSV
     try:
         df = pd.read_csv(log_csv)
         if not df.empty:
@@ -636,28 +747,35 @@ def eval_fold(model: nn.Module, fold_dir: Path,
               img_test_path: str, mode_label: str,
               gt_linew: float, pred_linew: float,
               tta=True, show=True):
-    # threshold chosen on validation (overlap-only)
+    """
+    Evaluate a single LOIO fold:
+      - pick threshold on validation image (overlap-only Dice)
+      - apply to test image, watershed split, post-filter
+      - compute overlap-only Dice/IoU
+      - save overlay and JSON metrics
+    """
+    # Threshold from validation
     val_prob = tta_proba_8x(model, val_img) if tta else sliding_proba_seamless(model, val_img)
-    if PROBA_SMOOTH_SIGMA>0:  # disabled to match full pipeline
+    if PROBA_SMOOTH_SIGMA>0:  # disabled for parity
         val_prob = gaussian(val_prob, sigma=PROBA_SMOOTH_SIGMA, preserve_range=True)
     thr,_ = pick_best_threshold_overlap(val_prob, (val_msk>0).astype(np.uint8), THR_GRID)
     (fold_dir/"val_threshold.txt").write_text(f"thr={thr:.4f}  (overlap-only)\n")
 
-    # test prob → threshold (no pre-split cleaning)
+    # Test image -> prob -> threshold
     test_prob = tta_proba_8x(model, test_img) if tta else sliding_proba_seamless(model, test_img)
     if PROBA_SMOOTH_SIGMA>0:  # disabled
         test_prob = gaussian(test_prob, sigma=PROBA_SMOOTH_SIGMA, preserve_range=True)
     pred_bin = (test_prob>=thr).astype(np.uint8)
 
-    # watershed split + post label filtering (same as full pipeline)
+    # Watershed split + label filtering (identical to full pipeline)
     pred_lbl   = split_touching_cells(pred_bin, min_distance=WS_MIN_DISTANCE)
     pred_binPP = (pred_lbl>0).astype(np.uint8)
     gt_bin     = (test_msk>0).astype(np.uint8)
 
-    # metrics (overlap-only)
+    # Overlap-only metrics
     dice_ol, iou_ol = dice_iou_overlap_only(pred_binPP, gt_bin)
 
-    # overlay
+    # Overlay figure with contours + scalebar
     gt_bound   = find_boundaries(gt_bin.astype(bool),   mode='outer')
     pred_bound = find_boundaries(pred_binPP.astype(bool), mode='outer')
     base_rgb = get_rgb_display(img_test_path, mode_label, lum_low=args.lum_low, lum_high=args.lum_high, gain=args.gain, gamma=args.gamma)
@@ -667,6 +785,7 @@ def eval_fold(model: nn.Module, fold_dir: Path,
                              MICRONS_PER_PIXEL, args.bar_um, args.bar_loc, args.bar_text,
                              show=show)
 
+    # Persist metrics
     with open(fold_dir/"test_metrics.json","w") as f:
         json.dump({"threshold":float(thr),
                    "dice_overlap_only":float(dice_ol),
@@ -675,6 +794,10 @@ def eval_fold(model: nn.Module, fold_dir: Path,
     return dice_ol, iou_ol, float(thr)
 
 def read_source_base(mode_root: Path, fallback_base: int) -> int:
+    """
+    Read base channels from run_config.json in a source experiment (if present).
+    Fallback to CLI --base if not found.
+    """
     cfg = mode_root/"run_config.json"
     if cfg.exists():
         try:
@@ -683,6 +806,10 @@ def read_source_base(mode_root: Path, fallback_base: int) -> int:
     return fallback_base
 
 def load_images_masks_for_mode(pairs: List[Tuple[str,str]], pipe_mode: str, in_mode: str):
+    """
+    Load all images/masks for a given pipeline mode and input mode.
+    Returns lists: IMGS (C,H,W), MSKS (H,W), IMG_PATHS (str).
+    """
     imgs, msks, img_paths = [], [], []
     for img_path, roi_zip in pairs:
         x = get_input_by_mode(img_path, pipe_mode, in_mode)  # (C,H,W)
@@ -692,6 +819,13 @@ def load_images_masks_for_mode(pairs: List[Tuple[str,str]], pipe_mode: str, in_m
 
 def run_eval_for_mode(mode: str, folds: List[int], pairs: List[Tuple[str,str]],
                       dest_root: Path, base: int, in_ch: int, tta: bool, show: bool):
+    """
+    Evaluate an entire dataset under one mode ('raw' or 'n2v'):
+      - ensure checkpoint directory exists
+      - if a fold checkpoint is missing, auto-train it now (LOIO)
+      - run eval_fold() for each test index
+      - collect rows: [fold_id, image_name, dice, iou, thr]
+    """
     src_mode_root  = SRC_ROOT / mode
     dest_mode_root = dest_root / mode
     dest_mode_root.mkdir(parents=True, exist_ok=True)
@@ -715,6 +849,7 @@ def run_eval_for_mode(mode: str, folds: List[int], pairs: List[Tuple[str,str]],
         model = UNet(in_ch,1,base).to(DEVICE)
         ckpt_path = fold_ckpt_dir/"best.pt"
         if not try_load_state(model, ckpt_path):
+            # Auto-train if checkpoint missing
             print(f"[auto-train] fold {test_idx+1} checkpoint missing -> training this fold now...")
             train_ids = [k for k in range(N) if k not in (test_idx, val_idx)]
             best_ckpt = train_fold_loio(
@@ -750,6 +885,7 @@ def run_eval_for_mode(mode: str, folds: List[int], pairs: List[Tuple[str,str]],
 
 # ---------- Excel + print ----------
 def build_needed_rows(raw_rows, n2v_rows):
+    """Convert raw/n2v row lists to a tidy dataframe schema for Excel and plots."""
     out=[]
     for r in raw_rows: out.append({"Image":r[1], "Mode":"RAW", "Dice":float(r[2]), "IoU":float(r[3])})
     for r in n2v_rows: out.append({"Image":r[1], "Mode":"DENOISED", "Dice":float(r[2]), "IoU":float(r[3])})
@@ -757,17 +893,22 @@ def build_needed_rows(raw_rows, n2v_rows):
 
 # === NEW: results plots ===
 def _annotate_bars(ax):
+    """Write bar heights as text labels above bars."""
     for p in ax.patches:
         h = p.get_height()
         ax.annotate(f"{h:.3f}", (p.get_x()+p.get_width()/2, h),
                     ha="center", va="bottom", fontsize=9, rotation=0, xytext=(0,3), textcoords="offset points")
 
 def plot_results(df: pd.DataFrame, dest_root: Path, show: bool):
+    """
+    Create per-image bar plots (Dice) and mean-by-mode plots (Dice/IoU).
+    Figures are saved into dest_root / 'plots'.
+    """
     if df.empty: return
     plots_dir = dest_root / "plots"
     plots_dir.mkdir(parents=True, exist_ok=True)
 
-    # Per-image Dice bars (RAW vs DENOISED) with IoU text
+    # Per-image Dice bars (RAW vs DENOISED) with IoU text labels
     for img in sorted(df['Image'].unique()):
         sub = df[df['Image']==img].copy()
         sub = sub.sort_values("Mode")
@@ -775,7 +916,6 @@ def plot_results(df: pd.DataFrame, dest_root: Path, show: bool):
         ax = plt.gca()
         ax.bar(sub["Mode"], sub["Dice"])
         _annotate_bars(ax)
-        # Add IoU as text underneath bars for clarity
         for i,(mode, iou) in enumerate(zip(sub["Mode"], sub["IoU"])):
             ax.text(i, max(sub["Dice"])*0.02, f"IoU {iou:.3f}", ha="center", va="bottom", fontsize=8)
         ax.set_ylim(0, 1.05*max(0.8, sub["Dice"].max()))
@@ -803,6 +943,10 @@ def plot_results(df: pd.DataFrame, dest_root: Path, show: bool):
 # === END NEW: results plots ===
 
 def save_paper_metrics_excel_and_print(raw_rows, n2v_rows, dest_root: Path):
+    """
+    Save a single Excel with per-image Dice/IoU for RAW and DENOISED.
+    Also pretty-print metrics to console and make summary plots.
+    """
     df = pd.DataFrame(build_needed_rows(raw_rows, n2v_rows))
     path_a = dest_root / "metrics.xlsx"
     path_b = dest_root / "metric_evaluation_results" / "metrics.xlsx"
@@ -831,7 +975,7 @@ def save_paper_metrics_excel_and_print(raw_rows, n2v_rows, dest_root: Path):
         if ok_b: print(f"Saved Excel: {path_b}")
     print("")
 
-    # === NEW: kick off plots ===
+    # Make result plots (non-fatal on failure)
     try:
         plot_results(df, dest_root, show=args.show)
     except Exception as e:
@@ -839,6 +983,11 @@ def save_paper_metrics_excel_and_print(raw_rows, n2v_rows, dest_root: Path):
 
 # ---------- Interactive pickers ----------
 def ask_user_files_if_needed() -> Tuple[List[str], List[str], Path]:
+    """
+    Collect image paths, ROI zip paths, and output directory:
+    - first from CLI; if missing, open Tk dialog pickers (multi-select).
+    - on headless failure, error with hints to use CLI.
+    """
     imgs = [p for p in map(str.strip, args.images.split(",")) if p] if args.images else []
     rois = [p for p in map(str.strip, args.rois.split(",")) if p] if args.rois else []
     out_dir = Path(args.out_dir) if args.out_dir else None
@@ -876,6 +1025,13 @@ def ask_user_files_if_needed() -> Tuple[List[str], List[str], Path]:
 
 # ---------- MAIN ----------
 def main():
+    """
+    Orchestrate the entire LOIO experiment:
+      1) Ask for files if needed; pair images to ROIs;
+      2) Optionally train all folds for each mode (raw/n2v);
+      3) Evaluate all folds (auto-train missing fold on the fly);
+      4) Save Excel, print metrics, and generate result plots.
+    """
     warnings.filterwarnings("ignore", category=UserWarning)
     seed_all(SEED)
 
@@ -887,7 +1043,7 @@ def main():
     DEST_ROOT = OUT_DIR / args.exp_name
     DEST_ROOT.mkdir(parents=True, exist_ok=True)
 
-    # Persist experiment metadata
+    # Persist experiment metadata for reproducibility
     (DEST_ROOT / "experiment.json").write_text(json.dumps({
         "source_exp": str(SRC_ROOT.name),
         "dest_exp": str(DEST_ROOT.name),
@@ -910,14 +1066,14 @@ def main():
         "evaluation": "Dice/IoU computed only on prediction overlapped with GT (clipped-to-GT)."
     }, indent=2))
 
-    # Folds (all images participate)
+    # Folds (each image participates once as test)
     N = len(pairs)
     folds = list(range(N))
 
     # In-channels by input mode
     in_ch = 3 if args.in_mode=="rgb" else 1
 
-    # TRAIN (optional)
+    # TRAIN (optional, all folds ahead of time)
     if args.train:
         print("\n=== TRAINING FROM SCRATCH (LOIO) ===")
         for mode in (["raw","n2v"] if args.modes=="both" else [args.modes]):
@@ -946,7 +1102,7 @@ def main():
                 )
                 print(f"[{mode}] fold {test_id+1} best: {best_ckpt}")
 
-    # EVAL
+    # EVAL (run modes requested; auto-train missing fold on demand)
     MODES_TO_RUN = (["raw","n2v"] if args.modes=="both" else [args.modes])
     tta = not args.no_tta
 
@@ -956,12 +1112,12 @@ def main():
     base = args.base
     for mode in MODES_TO_RUN:
         src_mode_root = SRC_ROOT / mode
-        base = read_source_base(src_mode_root, args.base)
+        base = read_source_base(src_mode_root, args.base)     # allow per-mode bases
         rows = run_eval_for_mode(mode, folds, pairs, DEST_ROOT, base, in_ch, tta, show=args.show)
         if mode=="raw": raw_rows = rows
         if mode=="n2v": n2v_rows = rows
 
-    # Save Excel + console print + NEW plots
+    # Save Excel + console print + plots
     save_paper_metrics_excel_and_print(raw_rows, n2v_rows, DEST_ROOT)
 
 if __name__ == "__main__":
