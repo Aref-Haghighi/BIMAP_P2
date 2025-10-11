@@ -1,143 +1,198 @@
-BIMAP-P2: Characterizing Bacteria Using Shape Descriptors
+# BIMAP-P2: SIM Bacterial Segmentation
 
-This repository contains a fully reproducible pipeline for Structured-Illumination Microscopy (SIM) analysis of Streptococcus pneumoniae. It implements Noise2Void denoising, segmentation with Cellpose and a U-Net trained from scratch (LOIO), a unified post-processing chain applied identically to both methods, and quantitative evaluation using Dice/IoU (overlap-only). The code generates paper-ready overlays, tables, figures, and training audits.
+Automated segmentation and denoising of *Streptococcus pneumoniae* structured-illumination microscopy (SIM) images under THY/NHS conditions. The repository compares three strategies—Cellpose (cyto, cyto2), Cellpose after Noise2Void, and a U-Net trained from scratch with leave-one-image-out (LOIO). All methods share one unified post-processing so results are directly comparable. The pipelines save publication-ready overlays with a 2 µm scale bar and per-image metrics (Dice, IoU, PSNR/SSIM, BRISQUE/NIQE, Δσ_bg, ΔCNR_gm, ΔFWHM).
 
-TABLE OF CONTENTS
+---
 
-Project Overview
+## Table of Contents
 
-Technologies Used
+- [Overview](#overview)
+- [Technologies](#technologies)
+- [Project Structure](#project-structure)
+- [Installation](#installation)
+- [Usage](#usage)
+- [Configuration](#configuration)
+- [Outputs](#outputs)
+- [Scripts](#scripts)
+- [Reproduce Paper Figures](#reproduce-paper-figures)
+- [Troubleshooting](#troubleshooting)
+- [License and Citation](#license-and-citation)
 
-Scripts
-3.1 noise2v_train.py
-3.2 Cellpose Segmentation with evaluation metrics.py(.py)
-3.3 train_UNet_from_scratch.py
-3.4 loss_performance metrics.py
+---
 
-Installation
+## Overview
 
-Usage
-5.1 Denoising (Noise2Void)
-5.2 Segmentation with Cellpose
-5.3 Segmentation with U-Net (Train From Scratch + LOIO)
-5.4 Training Audits
+This repository provides an **end-to-end, reproducible workflow** for SIM images of *S. pneumoniae* captured in laboratory (THY) and host-derived (NHS) media.
 
-Unified Post-Processing and Evaluation
+### What problem this solves
+SIM images can be noisy; bacterial boundaries and septa are subtle. Papers often mix different post-processing and metrics, making comparisons unfair. You need a pipeline you can rerun on new ROIs with identical settings.
 
-Scalebar Convention
+### What this repository offers
+A fair comparison of three strategies:
+- **Cellpose pretrained models** (`cyto`, `cyto2`)
+- **Cellpose after self-supervised Noise2Void** (per-channel caches)
+- **U-Net trained from scratch** with LOIO and 8× test-time augmentation
 
-Inputs, Outputs, and Naming
+Every method uses the same post-processing:  
+Gaussian-smoothed distance transform → watershed split (fixed peak distance) → small-object removal → solidity filtering.
 
-Repository Layout
+### Consistent outputs
+PNG overlays with a fixed 2 µm scale bar, per-image CSV/Excel metrics (Dice/IoU), denoising QA (PSNR/SSIM, BRISQUE/NIQE, Δσ_bg, ΔCNR_gm, ΔFWHM), and plots for quick review.
 
-Reproducibility Notes
+### Inputs and ground truth
+- Images in `.czi`/`.tif`/`.tiff`/`.png`/`.jpg`
+- Optional ImageJ `RoiSet.zip` ground truth
+- Optional per-channel N2V caches stored next to the image as `*_denoised_R.npy`, `*_denoised_G.npy`, `*_denoised_B.npy`
 
-Troubleshooting
+### Who this is for
+Researchers who want a transparent, rerunnable baseline with figures and tables that drop into manuscripts.
 
-License
+---
 
-Citation
+## Technologies
 
-1) PROJECT OVERVIEW
+- Python 3.10+
+- Cellpose, PyTorch
+- Noise2Void, CSBDeep, TensorFlow
+- scikit-image, OpenCV, NumPy, SciPy
+- Matplotlib, Pandas
+- czifile, read-roi
 
-Goal: robustly segment, quantify, and visualize S. pneumoniae in SIM images acquired under THY and NHS conditions.
+---
 
-Research questions addressed:
-• How do Cellpose (cyto, cyto2) and a U-Net trained from scratch compare when both use the same post-processing?
-• Does Noise2Void (N2V) self-supervised denoising improve downstream segmentation?
+## Project Structure
 
-Core deliverables: denoised channel caches, segmentation overlays with 2 µm scalebars, standardized CSV/XLSX metrics, and publication-ready figures/tables.
+```
+BIMAP_P2/
+├─ README.md
+├─ requirements.txt
+├─ .gitignore
+├─ paper/
+│  └─ BIMAP_P2_Mostajer_Haghighi.pdf
+├─ scripts/
+│  ├─ noise2v_train.py
+│  ├─ full_pipeline_cellpose.py           # or "Full pipeline_segmentation.py"
+│  ├─ train_UNet_from_scratch.py
+│  └─ loss_performance metrics.py         # training audit / learning-curves
+├─ experiments/                           # created at runtime (checkpoints, logs)
+└─ results/                                # created at runtime (overlays, CSV/Excel, plots)
+```
 
-2) TECHNOLOGIES USED
+---
 
-• Python 3.10+; NumPy, SciPy, scikit-image, pandas, matplotlib
-• Noise2Void (n2v) for self-supervised denoising
-• Cellpose (cyto, cyto2) for pre-trained segmentation
-• PyTorch for U-Net training and inference
-• czifile for .czi image support (optional)
-• Optional QA: BRISQUE/NIQE
+## Installation
 
-3) SCRIPTS
+```sh
+python -m venv .venv
+# Windows:
+.venv\Scripts\activate
+# macOS/Linux:
+source .venv/bin/activate
 
-3.1 noise2v_train.py
-Folder: “Noise2Void Denoising/”
-Function: per-channel N2V denoising with QA. Caches saved beside inputs as:
-*_denoised_R.npy, *_denoised_G.npy, *_denoised_B.npy
-Also writes QA plots (with µm scalebars) and psnr_ssim_3ch.csv. No-reference metrics (BRISQUE/NIQE) run if available.
+pip install -r requirements.txt
+```
 
-3.2 Cellpose Segmentation with evaluation metrics.py(.py)
-Folder: “Segmentation with Cellpose/”
-Function: runs Cellpose (cyto & cyto2) on raw or denoised inputs, applies the unified post-processing, and exports:
-• Overlays (PNG) with 2 µm scalebars
-• segmentation_metrics_overlay_3ch.csv (Dice/IoU; overlap-only)
-Note: If the file shows as “.py.py” it still runs; you may rename to a single “.py”.
+---
 
-3.3 train_UNet_from_scratch.py
-Folder: “Segmentation with U-Net Train From Scratch/”
-Function: U-Net training with Leave-One-Image-Out (LOIO); evaluation uses the same post-processing as Cellpose. Exports overlays and metrics.xlsx.
+## Usage
 
-3.4 loss_performance metrics.py
-Folder: “Segmentation with U-Net Train From Scratch/”
-Function: parses training logs, produces learning-curve PNGs, and writes results/audits/training_audit.csv (plus errors.txt if anomalies are found).
+### Noise2Void denoising and QA
 
-4) INSTALLATION
+```sh
+python scripts/noise2v_train.py --pixel-size 0.0322 --bar-length 2 --bar-loc "lower right"
+```
 
-Create environment (Conda recommended)
-conda env create -f environment.yml
-conda activate bimap-seg
+Select images and an output folder in the dialogs. If `*_denoised_R.npy`, `*_denoised_G.npy`, `*_denoised_B.npy` exist next to an image, they are reused (no retraining needed). Saves RAW vs DENOISED panels, difference maps, and QA CSV.
 
-Install PyTorch matching your CUDA (see the PyTorch website)
-Example (CUDA 12.1):
-pip install --index-url https://download.pytorch.org/whl/cu121
- torch torchvision torchaudio
+---
 
-(Optional) Enable Git LFS for large binaries
-git lfs install
-git lfs track ".czi" ".tif" ".tiff" "experiments/**/.pt" "models/**/*.h5"
-git add .gitattributes
+### Cellpose segmentation
 
-Windows note: when a path contains spaces, quote it (e.g., "Segmentation with Cellpose\...py").
+```sh
+python scripts/full_pipeline_cellpose.py
+# or, if your filename differs:
+python "scripts/Full pipeline_segmentation.py"
+```
 
-5) USAGE
+Pick images, optional ImageJ `RoiSet.zip` ground truth, and an output folder. If all three denoised caches exist next to an image, they are used; otherwise RAW is used. Applies unified post-processing, then saves overlays with a 2 µm scale bar and a CSV of Dice/IoU.
 
-Windows paths with spaces must be quoted, e.g.:
-python "Segmentation with Cellpose\Cellpose Segmentation with evaluation metrics.py.py"
+---
 
-5.1 Denoising (Noise2Void)
-macOS/Linux:
-python "Noise2Void Denoising/noise2v_train.py"
-Windows:
-python "Noise2Void Denoising\noise2v_train.py"
-Outputs: *denoised[R|G|B].npy caches, QA plots (with scalebars), psnr_ssim_3ch.csv.
+### U-Net train and evaluate (LOIO)
 
-5.2 Segmentation with Cellpose
-macOS/Linux:
-python "Segmentation with Cellpose/Cellpose Segmentation with evaluation metrics.py.py"
-Windows:
-python "Segmentation with Cellpose\Cellpose Segmentation with evaluation metrics.py.py"
-Select images, optional ROI zips (GT), and the output folder.
-Outputs: overlays with 2 µm scalebars and segmentation_metrics_overlay_3ch.csv.
+```sh
+python scripts/train_UNet_from_scratch.py --train --modes both --in-mode g --no-show
+```
 
-5.3 Segmentation with U-Net (Train From Scratch + LOIO)
-macOS/Linux:
-python "Segmentation with U-Net Train From Scratch/train_UNet_from_scratch.py" --modes both --in-mode rgb --epochs 50 --batch 8
-Windows:
-python "Segmentation with U-Net Train From Scratch\train_UNet_from_scratch.py" --modes both --in-mode rgb --epochs 50 --batch 8
-Auto-trains missing folds; evaluates existing checkpoints.
-Outputs: per-fold overlays/metrics and aggregated metrics.xlsx.
+Runs LOIO training and 8× TTA inference with the same post-processing as Cellpose. Writes `metrics.xlsx`, plots, and overlays under `results/<experiment>/`.
 
-5.4 Training Audits
-macOS/Linux:
-python "Segmentation with U-Net Train From Scratch/loss_performance metrics.py"
-Windows:
-python "Segmentation with U-Net Train From Scratch\loss_performance metrics.py"
-Outputs: results/audits/training_audit.csv, learning-curve PNGs, and errors.txt (if any).
+---
 
-6) UNIFIED POST-PROCESSING AND EVALUATION
+## Configuration
 
-Applied identically to Cellpose and U-Net masks:
-• Gaussian-smoothed Euclidean Distance Transform (EDT)
-• Peak detection with min distance = 10 px
-• Marker-controlled watershed split
-• Remove small objects: area ≥ 10 px
-• Shape filter: solidity ≥ 0.30
+- **Pixel size (µm/px):** `--pixel-size 0.0322`
+- **Scale-bar length (µm):** `--bar-length 2`
+- **Scale-bar location:** `--bar-loc "lower right"` (e.g., "lower right", "lower left")
+- **U-Net input mode:** `--in-mode g|rgb|lum`
+- **U-Net evaluation modes:** `--modes raw|n2v|both`
+- **Suppress windows during training/eval:** `--no-show`
+
+---
+
+## Outputs
+
+**Noise2Void:**  
+`results/psnr_ssim_3ch.csv`, RAW/DENOISED panels, absolute and signed difference maps, optional line-profiles/power spectra.
+
+**Cellpose:**  
+`results/overlays_cases/*.png`, `segmentation_metrics_overlay_3ch.csv`.
+
+**U-Net:**  
+`results/<experiment>/metrics.xlsx`, `results/<experiment>/plots/*.png`, per-image overlays.
+
+**Scale bar:**  
+2 µm by default (0.0322 µm/px). Override via CLI flags shown above.
+
+---
+
+## Scripts
+
+**noise2v_train.py**  
+Trains or reuses per-channel N2V; writes overlays and QA tables. Looks for \*denoised[RGB].npy next to each image.
+
+**full_pipeline_cellpose.py**  
+Segments with cyto and cyto2; if all three denoised caches are present beside an image, they’re used; otherwise RAW is used. Applies the unified post-processing; saves overlays and Dice/IoU CSV. Pairs images ↔ `RoiSet.zip` by ROI number and condition tokens (e.g., WT, THY, NHS).
+
+**train_UNet_from_scratch.py**  
+LOIO training/validation/testing with 8× TTA, identical post-processing, per-image Dice/IoU to `metrics.xlsx`, plus plots and overlays.
+
+**loss_performance metrics.py**  
+Parses training logs, plots learning curves, flags plateaus/jumps or missing checkpoints, and saves an audit CSV.
+
+---
+
+## Reproduce Paper Figures
+
+- **Denoising panels and QA:** run `noise2v_train.py`; use the saved overlays and `psnr_ssim_3ch.csv`.
+- **Cellpose overlays and metrics:** run `full_pipeline_cellpose.py`; use `results/overlays_cases/*.png` and `segmentation_metrics_overlay_3ch.csv`.
+- **U-Net overlays, metrics, and plots:** run `train_UNet_from_scratch.py`; use `results/<experiment>/metrics.xlsx` and `results/<experiment>/plots/*.png`.
+
+---
+
+## Troubleshooting
+
+- **BRISQUE/NIQE not installed:**  
+  Scripts still run; those columns will be written as missing.
+
+- **CUDA not detected for Cellpose/PyTorch:**  
+  Falls back to CPU. Install GPU drivers/CUDA if you want acceleration.
+
+- **Scale bar missing or wrong:**  
+  Pass `--pixel-size` and `--bar-length` explicitly to ensure correct units.
+
+---
+
+## License and Citation
+
+**License:** MIT  
+Please cite the included paper in `paper/` and this repository (see `CITATION.cff` if present).
