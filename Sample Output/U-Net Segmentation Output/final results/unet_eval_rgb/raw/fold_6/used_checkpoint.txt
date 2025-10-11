@@ -1,0 +1,1 @@
+experiments\unet_cv\raw\fold_6\best.pt
