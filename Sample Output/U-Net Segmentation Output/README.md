@@ -1,1 +1,2 @@
-
+- The Final Metrics are the information related to the loss/performance metrics of the training of the U-Net
+- The Final results are the checkpoints of n2v and also raw images, which are trained and can be used for segmentation. 
