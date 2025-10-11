@@ -1,0 +1,44 @@
+name: bimap-p2
+channels:
+  - conda-forge
+  - pytorch
+dependencies:
+  # --- Core runtime ---
+  - python=3.10
+  - pip
+  - tk                                # for the Tk GUI pickers used in your scripts
+
+  # --- Numerics / image / plotting ---
+  - numpy=1.26.*
+  - scipy=1.11.*
+  - scikit-image=0.23.*
+  - pandas=2.2.*
+  - matplotlib=3.8.*
+  - opencv=4.9.*                      # conda-forge opencv (C/C++ libs prebuilt)
+  - tifffile>=2024.5.10
+
+  # --- Torch (CPU build) ---
+  - pytorch=2.2.*                     # CPU build from pytorch channel
+  - torchvision=0.17.*
+  - cpuonly                            # ensures CPU-only PyTorch
+
+  # --- Optional libs used by QA / metrics ---
+  - libsvm                            # backend for BRISQUE (your code shims it)
+  - openpyxl                          # excel export path A
+  - xlsxwriter                        # excel export path B
+
+  # --- Install PyPI packages via pip (not on conda or better from PyPI) ---
+  - pip:
+      # Microscopy + denoising
+      - cellpose==3.0.7
+      - csbdeep==0.7.4
+      - n2v==0.3.4                     # Noise2Void
+      - czifile==2019.7.2              # CZI reading (matches your imports)
+      - read-roi==1.6.1                # ROI zip reader
+
+      # Image quality metrics (your BRISQUE / NIQE shims)
+      - brisque==0.0.16
+      - libsvm-official==3.32.0        # provides python module "libsvm" if conda libsvm is missing
+
+      # If you prefer headless servers, uncomment the next line and remove conda "opencv"
+      # - opencv-python-headless==4.9.0.80
