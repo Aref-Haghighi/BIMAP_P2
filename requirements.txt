@@ -1,0 +1,27 @@
+# --- Torch (pip CPU wheels by default) ---
+torch==2.2.2
+torchvision==0.17.2
+
+# --- Numerics / image / plotting ---
+numpy==1.26.4
+scipy==1.11.4
+scikit-image==0.23.2
+pandas==2.2.2
+matplotlib==3.8.4
+opencv-python==4.9.0.80
+tifffile==2024.5.10
+
+# --- Microscopy + denoising ---
+cellpose==3.0.7
+csbdeep==0.7.4
+n2v==0.3.4
+czifile==2019.7.2
+read-roi==1.6.1
+
+# --- QA / metrics helpers ---
+brisque==0.0.16
+libsvm-official==3.32.0
+
+# --- Excel writers (your audit script can use either) ---
+openpyxl==3.1.5
+XlsxWriter==3.2.0
