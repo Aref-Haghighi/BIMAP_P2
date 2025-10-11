@@ -1,0 +1,6 @@
+{
+  "threshold": 0.45,
+  "dice_overlap_only": 0.9619395944530699,
+  "iou_overlap_only": 0.9266701526355262,
+  "note": "Overlap-only compares (pred \u2227 GT) vs GT."
+}
