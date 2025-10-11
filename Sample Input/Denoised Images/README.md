@@ -1,1 +1,1 @@
-
+- You can use these denoised files. For each image, there are 3 color channels to segment them with Cellpose and U-Net 
