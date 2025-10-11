@@ -1,1 +1,2 @@
-
+- There are Raw images or CZI files as input for Segmentation with Cellpose and U-Net, as well as for N2V denoising.
+- In addition, you can find the Denoised images and files in the Denoised sample files to use them as input for segmentation with Cellpose and U-Net.
