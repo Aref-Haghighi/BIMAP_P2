@@ -1,0 +1,17 @@
+mode,fold,epochs,best_epoch,best_valDice,last_train_loss,last_valDice,last10_valDice_slope,has_log,has_best_pt,has_last_pt,warnings
+n2v,1,15,6,0.9338,0.2217,0.8957,-0.000318788,TRUE,TRUE,TRUE,valDice_plateau_last10
+n2v,2,13,2,0.9856,0.2263,0.923,-0.000132424,TRUE,TRUE,TRUE,few_epochs:13;valDice_plateau_last10
+n2v,3,15,6,1,0.1979,0.9345,0.000639394,TRUE,TRUE,TRUE,valDice_plateau_last10
+n2v,4,16,8,0.8448,0.1627,0.5544,-0.00984,TRUE,TRUE,TRUE,valDice_big_jump:0.46
+n2v,5,22,20,0.9347,0.1482,0.834,-0.007069394,TRUE,TRUE,TRUE,valDice_big_jump:0.47
+n2v,6,14,4,1,0.1749,0.9884,-0.001958788,TRUE,TRUE,TRUE,few_epochs:14
+n2v,7,13,2,0.2727,0.1926,0.1141,0.000705455,TRUE,TRUE,TRUE,few_epochs:13;valDice_plateau_last10
+n2v,8,14,4,0.9765,0.1849,0.5935,-0.008185152,TRUE,TRUE,TRUE,few_epochs:14;valDice_big_jump:0.61
+raw,1,19,14,0.9772,0.2054,0.9663,-0.002048485,TRUE,TRUE,TRUE,valDice_big_jump:0.34
+raw,2,16,8,0.9893,0.1975,0.967,-0.000311515,TRUE,TRUE,TRUE,valDice_plateau_last10
+raw,3,17,10,0.9893,0.1984,0.9359,0.003669091,TRUE,TRUE,TRUE,valDice_big_jump:0.96
+raw,4,17,10,0.87,0.162,0.8368,-0.001811212,TRUE,TRUE,TRUE,valDice_big_jump:0.83
+raw,5,21,18,0.8639,0.1506,0.7691,-0.002165455,TRUE,TRUE,TRUE,valDice_big_jump:0.30
+raw,6,17,12,0.9985,0.1946,0,-0.048927576,TRUE,TRUE,TRUE,valDice_big_jump:0.73
+raw,7,25,38,0.9263,0.1546,0.7205,-0.003655758,TRUE,TRUE,TRUE,valDice_big_jump:0.73
+raw,8,25,34,0.9323,0.1764,0.3461,-0.020061818,TRUE,TRUE,TRUE,valDice_big_jump:0.90

@@ -1,0 +1,51 @@
+[N2V] fold 1
+  - valDice_plateau_last10
+
+[N2V] fold 2
+  - few_epochs:13
+  - valDice_plateau_last10
+
+[N2V] fold 3
+  - valDice_plateau_last10
+
+[N2V] fold 4
+  - valDice_big_jump:0.46
+
+[N2V] fold 5
+  - valDice_big_jump:0.47
+
+[N2V] fold 6
+  - few_epochs:14
+
+[N2V] fold 7
+  - few_epochs:13
+  - valDice_plateau_last10
+
+[N2V] fold 8
+  - few_epochs:14
+  - valDice_big_jump:0.61
+
+[RAW] fold 1
+  - valDice_big_jump:0.34
+
+[RAW] fold 2
+  - valDice_plateau_last10
+
+[RAW] fold 3
+  - valDice_big_jump:0.96
+
+[RAW] fold 4
+  - valDice_big_jump:0.83
+
+[RAW] fold 5
+  - valDice_big_jump:0.30
+
+[RAW] fold 6
+  - valDice_big_jump:0.73
+
+[RAW] fold 7
+  - valDice_big_jump:0.73
+
+[RAW] fold 8
+  - valDice_big_jump:0.90
+
