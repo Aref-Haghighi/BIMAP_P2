@@ -1,6 +1,6 @@
 # BIMAP-P2: SIM Bacterial Segmentation
 
-Automated segmentation and denoising of *Streptococcus pneumoniae* structured-illumination microscopy (SIM) images under THY/NHS conditions. The repository compares three strategies—Cellpose (cyto, cyto2), Cellpose after Noise2Void, and a U-Net trained from scratch with leave-one-image-out (LOIO). All methods share one unified post-processing so results are directly comparable. The pipelines save publication-ready overlays with a 2 µm scale bar and per-image metrics (Dice, IoU, PSNR/SSIM, BRISQUE/NIQE, Δσ_bg, ΔCNR_gm, ΔFWHM).
+Automated segmentation and denoising of *Streptococcus pneumoniae* structured-illumination microscopy (SIM) images under THY/NHS conditions. The repository compares three strategies—Cellpose (cyto, cyto2), Cellpose after Noise2Void, and a U-Net trained from scratch with leave-one-image-out (LOIO). All methods share one unified post-processing so results are directly comparable. The pipelines save publication-ready overlays with a 2 µm scale bar and per-image metrics (Dice, IoU, PSNR/SSIM, BRISQUE, Δσ_bg, ΔCNR_gm, ΔFWHM).
 
 ---
 
