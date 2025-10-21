@@ -138,6 +138,7 @@ FILTER_MIN_SOLIDITY    = 0.30  # keep regions with shape quality or solidity(are
 def seed_all(s=SEED):
     random.seed(s); np.random.seed(s)
     torch.manual_seed(s); torch.cuda.manual_seed_all(s)
+# Enable cuDNN benchmark on CUDA for speed.
 seed_all()
 if DEVICE.type == "cuda":
     torch.backends.cudnn.benchmark = True
@@ -147,11 +148,17 @@ def normalize01(x: np.ndarray) -> np.ndarray:
     return np.zeros_like(x) if mx <= mn else (x - mn) / (mx - mn + 1e-8)
 
 # IO: CZI + standard images
+# 
 def _read_any_image_float01(path: str) -> np.ndarray:
     """
-    Return (C,Y,X) float[0,1].
-    - .czi via czifile: squeeze to C,Y,X using Z=0,T=0
+    Reads a file and returns (C,Y,X) float[0,1].
+    - .czi via czifile: squeeze dims to C,Y,X using Z=0,T=0
     - jpg/png/tif via cv2 -> RGB -> (C,Y,X)
+
+    
+    For regular images:
+    If grayscale → replicate to 3 channels.
+    If BGR/RGBA → convert to RGB, scale to [0,1].
     """
     ext = Path(path).suffix.lower()
     if ext == ".czi":
@@ -177,11 +184,13 @@ def _read_any_image_float01(path: str) -> np.ndarray:
         return np.moveaxis(img, 2, 0)
     raise ValueError(f"Unsupported image ndim for {path}")
 
+# Load image, choose green channel (index 1 if exists, else 0), normalize → (H,W)
 def czi_to_green01(filename: str) -> np.ndarray:
     cyx = _read_any_image_float01(filename)
     g_idx = 1 if cyx.shape[0] >= 2 else 0
     return normalize01(cyx[g_idx])
 
+# Make sure you get a clean 3-channel (3 # of channels, Height(number of rows), Width(number of columns)) RGB array, pulling channels from CZI or standard images (with sensible fallbacks)
 def get_rgb01_any(path: str) -> np.ndarray:
     cyx = _read_any_image_float01(path)
     c = cyx.shape[0]
@@ -190,6 +199,7 @@ def get_rgb01_any(path: str) -> np.ndarray:
     b = 2 if c>=3 else g
     return np.stack([normalize01(cyx[r]), normalize01(cyx[g]), normalize01(cyx[b])], axis=0)  # (3,H,W)
 
+# Read an ImageJ ROI zip, rasterize polygons to a binary mask of given shape (H,W).
 def roi_zip_to_binary_mask(roi_zip: str, shape: Tuple[int,int]) -> np.ndarray:
     mask = np.zeros(shape, dtype=np.uint8)
     rois = read_roi_zip(roi_zip)
@@ -200,6 +210,7 @@ def roi_zip_to_binary_mask(roi_zip: str, shape: Tuple[int,int]) -> np.ndarray:
         mask[poly] = 1
     return mask
 
+# Try np.load for cached .npy files; return None if missing.
 def _try_load(path: Path) -> Optional[np.ndarray]:
     try:
         if path.exists(): return np.load(path).astype(np.float32)
@@ -208,9 +219,9 @@ def _try_load(path: Path) -> Optional[np.ndarray]:
 
 # Model input by pipeline mode + in-mode
 def get_input_by_mode(img_path: str, pipe_mode: str, in_mode: str) -> np.ndarray:
-    if in_mode == "g":
+    if in_mode == "g":                # use green channel.
         g = czi_to_green01(img_path)  # (H,W)
-        if pipe_mode == "raw":
+        if pipe_mode == "raw":        # try to load _denoised_G.npy from cache; if missing, warn and fall back to RAW.
             return g[None,...]
         # n2v
         base = Path(img_path).name
@@ -223,7 +234,7 @@ def get_input_by_mode(img_path: str, pipe_mode: str, in_mode: str) -> np.ndarray
     # RGB or luminance
     def _rgb_from(mode):
         stem = Path(img_path).name
-        if mode == "n2v":
+        if mode == "n2v":                       # If pipe_mode == "n2v", try _denoised_R/G/B.npy; if missing, fall back to RAW.
             cand = [
                 (N2V_CACHE/f"{stem}_denoised_R.npy", N2V_CACHE/f"{stem}_denoised_G.npy", N2V_CACHE/f"{stem}_denoised_B.npy"),
                 (Path(img_path).with_suffix("").with_name(stem+"_denoised_R.npy"),
@@ -238,13 +249,13 @@ def get_input_by_mode(img_path: str, pipe_mode: str, in_mode: str) -> np.ndarray
         return get_rgb01_any(img_path)
 
     RGB = _rgb_from(pipe_mode)  # (3,H,W)
-    if in_mode == "rgb":
+    if in_mode == "rgb":    # If in_mode == "rgb", return 3-ch stack.
         return RGB
-    # luminance
+    # luminance , Else compute luminance Y = 0.2126 R + 0.7152 G + 0.0722 B → single channel.
     Y = (0.2126*RGB[0] + 0.7152*RGB[1] + 0.0722*RGB[2]).astype(np.float32)
-    return Y[None,...]
+    return Y[None,...]               
 
-# Display enhancer (visual only)
+# Display enhancer (visual only) - percentile stretch, optional gain & gamma to make images look nice in figures.
 def enhance_rgb_for_display(rgb01_hwc: np.ndarray, low_pct=2.0, high_pct=99.7, gain=1.15, gamma=0.90):
     x = rgb01_hwc.clip(0,1).astype(np.float32)
     Y = 0.2126*x[...,0]+0.7152*x[...,1]+0.0722*x[...,2]
@@ -255,6 +266,7 @@ def enhance_rgb_for_display(rgb01_hwc: np.ndarray, low_pct=2.0, high_pct=99.7, g
     if gamma!=1.0: x = np.power(x,gamma)
     return x
 
+# fetch N2V RGB if available (and requested), else RAW RGB; apply the enhancer; return (H,W,3).
 def get_rgb_display(img_path: str, pipe_mode: str, lum_low=2.0, lum_high=99.7, gain=1.15, gamma=0.90) -> np.ndarray:
     # try n2v RGB first
     stem = Path(img_path).name
@@ -301,35 +313,40 @@ def pair_images_to_rois(image_paths: List[str], roi_paths: List[str]) -> List[Tu
     ordered = [(ip, ip2rp.get(ip, R[0])) for ip in I]  # fallback to first ROI if missing
     return ordered
 
-# ---------- Model ----------
-class DoubleConv(nn.Module):
-    def __init__(self, in_ch, out_ch):
-        super().__init__()
-        self.net = nn.Sequential(
-            nn.Conv2d(in_ch, out_ch, 3, padding=1), nn.BatchNorm2d(out_ch), nn.ReLU(inplace=True),
-            nn.Conv2d(out_ch, out_ch, 3, padding=1), nn.BatchNorm2d(out_ch), nn.ReLU(inplace=True),
+# ---------- Model ---------- 
+# (Conv → BN → ReLU) × 2.
+class DoubleConv(nn.Module):                   # Defines a reusable block: two conv layers back-to-back (a common UNet pattern).
+    def __init__(self, in_ch, out_ch):         # Constructor gets input channels and output channels.
+        super().__init__()                     # Properly initializes the PyTorch module base class.
+        self.net = nn.Sequential(              # Bundle layers into a single ordered module.
+            nn.Conv2d(in_ch, out_ch, 3, padding=1), nn.BatchNorm2d(out_ch), nn.ReLU(inplace=True),    # 2D convolution, 3×3 kernel, padding=1 to keep H×W the same.
+            nn.Conv2d(out_ch, out_ch, 3, padding=1), nn.BatchNorm2d(out_ch), nn.ReLU(inplace=True),   # BatchNorm to stabilize training/normalize features per channel. - Nonlinearity; inplace saves a bit of memory.
         )
-    def forward(self, x): return self.net(x)
+    def forward(self, x): return self.net(x)   # Forward pass just runs the Sequential block on input x.
 
+
+# UNet — classic encoder-decoder with skip connections:
 class UNet(nn.Module):
-    def __init__(self, in_ch=1, out_ch=1, base=32):
+    def __init__(self, in_ch=1, out_ch=1, base=32):     # input channels (e.g., 1 for green or luminance; 3 for RGB when used). - output channels (binary segmentation → 1 logit map). - the width of the network; channels grow as 32, 64, 128, 256, 512…
         super().__init__()
-        self.d1 = DoubleConv(in_ch, base)
-        self.pool = nn.MaxPool2d(2)
-        self.d2 = DoubleConv(base, base*2)
-        self.d3 = DoubleConv(base*2, base*4)
-        self.d4 = DoubleConv(base*4, base*8)
-        self.bottleneck = DoubleConv(base*8, base*16)
-        self.up4 = nn.ConvTranspose2d(base*16, base*8, 2, stride=2); self.c4 = DoubleConv(base*16, base*8)
-        self.up3 = nn.ConvTranspose2d(base*8, base*4, 2, stride=2);  self.c3 = DoubleConv(base*8, base*4)
-        self.up2 = nn.ConvTranspose2d(base*4, base*2, 2, stride=2);  self.c2 = DoubleConv(base*4, base*2)
-        self.up1 = nn.ConvTranspose2d(base*2, base, 2, stride=2);    self.c1 = DoubleConv(base*2, base)
-        self.out = nn.Conv2d(base, out_ch, 1)
+        self.d1 = DoubleConv(in_ch, base)               # first double-conv at full resolution: in_ch → base channels.           
+        self.pool = nn.MaxPool2d(2)                     # 2×2 max-pool halves H and W each time (downsampling).
+        self.d2 = DoubleConv(base, base*2)              # next level: base → 2×base channels at half resolution.
+        self.d3 = DoubleConv(base*2, base*4)            # 2×base → 4×base at quarter resolution.
+        self.d4 = DoubleConv(base*4, base*8)            # 4×base → 8×base at one-eighth resolution.
+        self.bottleneck = DoubleConv(base*8, base*16)   # deepest block: 8×base → 16×base at one-sixteenth - This is the “bridge” between encoder and decoder.
+        self.up4 = nn.ConvTranspose2d(base*16, base*8, 2, stride=2); self.c4 = DoubleConv(base*16, base*8)      # transpose convolution (a learnable upsampler) that doubles H and W: channels: 16×base → 8×base, kernel=2, stride=2. after upsampling, concatenate with the skip from encoder level 4 → channel count doubles (8×base from up + 8×base from skip = 16×base), then run a DoubleConv to fuse down to 8×base.
+        self.up3 = nn.ConvTranspose2d(base*8, base*4, 2, stride=2);  self.c3 = DoubleConv(base*8, base*4)       # repeat pattern for the next level: upsample 8×base → 4×base, concat with encoder x3 (4×base), DoubleConv(8×base → 4×base).
+        self.up2 = nn.ConvTranspose2d(base*4, base*2, 2, stride=2);  self.c2 = DoubleConv(base*4, base*2)       # upsample 4×base → 2×base, concat with x2 (2×base), DoubleConv(4×base → 2×base).
+        self.up1 = nn.ConvTranspose2d(base*2, base, 2, stride=2);    self.c1 = DoubleConv(base*2, base)         # upsample 2×base → base, concat with x1 (base), DoubleConv(2×base → base)
+        self.out = nn.Conv2d(base, out_ch, 1)           # 1×1 conv to map features to final classes (binary → 1 channel logit).
+
+    # Encoder pass (down path): 
     def forward(self, x):
-        x1 = self.d1(x); x2 = self.d2(self.pool(x1)); x3 = self.d3(self.pool(x2)); x4 = self.d4(self.pool(x3))
+        x1 = self.d1(x); x2 = self.d2(self.pool(x1)); x3 = self.d3(self.pool(x2)); x4 = self.d4(self.pool(x3))   # full-res features after first DoubleConv. - pool(x1) halves size → feed into d2 → x2. - Repeat: pool → d3 → x3, pool → d4 → x4, pool → bottleneck → x5.
         x5 = self.bottleneck(self.pool(x4))
-        y4 = self.c4(torch.cat([self.up4(x5), x4], dim=1))
-        y3 = self.c3(torch.cat([self.up3(y4), x3], dim=1))
+        y4 = self.c4(torch.cat([self.up4(x5), x4], dim=1)) # upsamples to match x4’s spatial size; torch.cat([... , x4], dim=1) concatenates along channel dimension (=1 in NCHW).  - self.c4(...) fuses the upsampled features and the skip features.
+        y3 = self.c3(torch.cat([self.up3(y4), x3], dim=1)) # Repeat the same pattern with x3, x2, x1.
         y2 = self.c2(torch.cat([self.up2(y3), x2], dim=1))
         y1 = self.c1(torch.cat([self.up1(y2), x1], dim=1))
         return self.out(y1)
