@@ -552,9 +552,9 @@ def run_pipeline(in_dir, out_dir, files_explicit, force=False, model_dir="./mode
         t.auto_set_font_size(False); t.set_fontsize(9); t.scale(1,1.2)
         plt.tight_layout(); plt.savefig(out_dir/"summary_table_deltas.png", dpi=300); plt.close(fig)
 
-    print(f"\n✅ Metrics saved to: {csv_path}")
-    print(f"✅ Overlays saved in: {overlay_dir}")
-    print(f"✅ Summary plots saved to: {out_dir}")
+    print(f"\n Metrics are saved to: {csv_path}")
+    print(f" Overlays are saved in: {overlay_dir}")
+    print(f" Summary plots are saved to: {out_dir}")
 
 # ---------- simple file pickers ----------
 
